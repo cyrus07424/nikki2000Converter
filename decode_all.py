@@ -61,33 +61,152 @@ def decode_and_split_entries(decoded_body):
     return entries
 
 
-with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8-sig') as csvfile:
-    csv_writer = csv.writer(csvfile, quoting=csv.QUOTE_ALL)
-    csv_writer.writerow(['date', 'weather', 'mood', 'is_anniversary', 'entry'])
+import json
+
+OUTPUT_JSON = r'diary.json'
+OUTPUT_HTML = r'diary.html'
+
+def write_as_csv(entries):
+    if not entries:
+        print("No entries to write for CSV.")
+        return
+    with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8-sig') as csvfile:
+        csv_writer = csv.writer(csvfile, quoting=csv.QUOTE_ALL)
+        csv_writer.writerow(entries[0].keys())
+        for entry in entries:
+            csv_writer.writerow(entry.values())
+    print(f"Successfully converted to {OUTPUT_CSV}")
+
+def write_as_json(entries):
+    if not entries:
+        print("No entries to write for JSON.")
+        return
+    with open(OUTPUT_JSON, 'w', encoding='utf-8') as jsonfile:
+        json.dump(entries, jsonfile, ensure_ascii=False, indent=4)
+    print(f"Successfully converted to {OUTPUT_JSON}")
+
+def write_as_html(entries):
+    if not entries:
+        print("No entries to write for HTML.")
+        return
+
+    html_content = """
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日記</title>
+    <style>
+        body { font-family: sans-serif; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #dddddd; text-align: left; padding: 8px; }
+        th { background-color: #f2f2f2; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        .entry { white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>日記帳</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>日付</th>
+                <th>天気</th>
+                <th>気分</th>
+                <th>記念日</th>
+                <th>本文</th>
+            </tr>
+        </thead>
+        <tbody>
+"""
+    for entry in entries:
+        html_content += f"""
+            <tr>
+                <td>{entry['date']}</td>
+                <td>{entry['weather']}</td>
+                <td>{entry['mood']}</td>
+                <td>{'はい' if entry['is_anniversary'] else 'いいえ'}</td>
+                <td class="entry">{entry['entry'].replace('\\n', '<br>')}</td>
+            </tr>
+"""
+    html_content += """
+        </tbody>
+    </table>
+</body>
+</html>
+"""
+    with open(OUTPUT_HTML, 'w', encoding='utf-8') as htmlfile:
+        htmlfile.write(html_content)
+    print(f"Successfully converted to {OUTPUT_HTML}")
+
+
+def get_all_entries():
+    all_entries = []
+    if not os.path.exists(DATA_DIR):
+        return all_entries
 
     for filename in sorted(os.listdir(DATA_DIR)):
-        if filename.endswith('.DAY'):
-            file_path = os.path.join(DATA_DIR, filename)
-            date_str = os.path.splitext(filename)[0]
-            year = date_str[:4]
-            month = int(date_str[4:6])
+        if not filename.endswith('.DAY'):
+            continue
 
-            with open(file_path, 'rb') as f:
-                content = f.read()
+        file_path = os.path.join(DATA_DIR, filename)
+        date_str = os.path.splitext(filename)[0]
+        year = date_str[:4]
+        month = int(date_str[4:6])
 
-            header_size = 13
-            if len(content) <= header_size:
-                continue
+        with open(file_path, 'rb') as f:
+            content = f.read()
 
-            encoded_body = content[header_size:]
-            decoded_body = bytearray([b ^ XOR_KEY for b in encoded_body])
+        header_size = 13
+        if len(content) <= header_size:
+            continue
 
-            decoded_entries = decode_and_split_entries(decoded_body)
-            
-            for entry in decoded_entries:
-                if entry['text']:
-                    date_formatted = f"{year}-{month:02d}-{entry['day']:02d}"
-                    entry_text_cleaned = entry['text'].replace('\r\n', '\\n').replace('\r', '\\n').replace('\n', '\\n')
-                    csv_writer.writerow([date_formatted, entry['weather'], entry['mood'], entry['is_anniversary'], entry_text_cleaned])
+        encoded_body = content[header_size:]
+        decoded_body = bytearray([b ^ XOR_KEY for b in encoded_body])
 
-print(f"Successfully converted all .DAY files to {OUTPUT_CSV}")
+        decoded_entries = decode_and_split_entries(decoded_body)
+
+        for entry in decoded_entries:
+            if entry['text']:
+                date_formatted = f"{year}-{month:02d}-{entry['day']:02d}"
+                entry_text_cleaned = entry['text'].replace('\r\n', '\\n').replace('\r', '\\n').replace('\n', '\\n')
+                all_entries.append({
+                    'date': date_formatted,
+                    'weather': entry['weather'],
+                    'mood': entry['mood'],
+                    'is_anniversary': entry['is_anniversary'],
+                    'entry': entry_text_cleaned
+                })
+    return all_entries
+
+
+import argparse
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='日記帳2000の.DAYファイルをCSV, JSON, HTML形式に変換します。')
+    parser.add_argument('--format', type=str, choices=['csv', 'json', 'html'], help='出力形式を指定します。指定しない場合は全ての形式で出力します。')
+    args = parser.parse_args()
+
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+        print(f"'{DATA_DIR}' directory created. Please place your .DAY files there and run again.")
+    else:
+        all_entries = get_all_entries()
+        print(f"Found {len(all_entries)} entries.")
+
+        if not all_entries:
+            print("No entries to convert.")
+        else:
+            if args.format:
+                if args.format == 'csv':
+                    write_as_csv(all_entries)
+                elif args.format == 'json':
+                    write_as_json(all_entries)
+                elif args.format == 'html':
+                    write_as_html(all_entries)
+            else:
+                # If no format is specified, output all formats
+                write_as_csv(all_entries)
+                write_as_json(all_entries)
+                write_as_html(all_entries)
