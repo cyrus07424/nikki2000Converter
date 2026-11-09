@@ -9,3 +9,7 @@ eframe = { version = "0.32", default-features = false, features = ["default_font
 encoding_rs = "0.8"
 rfd = "0.15"
 tempfile = "3.15"
+
+[target.'cfg(windows)'.dependencies]
+# eframe's minimal WGPU feature does not select a native graphics backend.
+wgpu = { version = "25", default-features = false, features = ["dx12"] }
