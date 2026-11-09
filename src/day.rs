@@ -58,6 +58,7 @@ pub enum DayFormatError {
     EmptyTextRecord { index: usize },
     TruncatedRecordText { index: usize },
     MissingTextTerminator { index: usize },
+    TextTooLong { index: usize },
     TooManyRecords,
     PayloadTooLarge,
     InvalidWeatherCode,
@@ -95,6 +96,9 @@ impl fmt::Display for DayFormatError {
             }
             Self::MissingTextTerminator { index } => {
                 write!(formatter, "record {index} is missing its trailing NUL")
+            }
+            Self::TextTooLong { index } => {
+                write!(formatter, "record {index} text exceeds 65535 bytes")
             }
             Self::TooManyRecords => write!(formatter, "record count exceeds 255"),
             Self::PayloadTooLarge => write!(formatter, "body exceeds the 32-bit file limit"),
@@ -221,8 +225,8 @@ pub fn encode_day_file(records: &[DayRecord]) -> Result<Vec<u8>, DayFormatError>
         }
 
         let text_bytes = encoded_text(record)?;
-        let text_len = u16::try_from(text_bytes.len())
-            .map_err(|_| DayFormatError::TruncatedRecordText { index })?;
+        let text_len =
+            u16::try_from(text_bytes.len()).map_err(|_| DayFormatError::TextTooLong { index })?;
         body.push(record.day);
         body.extend_from_slice(&record.flags.to_le_bytes());
         body.extend_from_slice(&text_len.to_le_bytes());
@@ -332,5 +336,13 @@ mod tests {
             encode_day_file(&records),
             Err(DayFormatError::TextNotRepresentableInShiftJis)
         );
+    }
+
+    #[test]
+    fn reports_text_length_overflow_with_a_specific_error() {
+        let records = vec![DayRecord::new(1, 0, "a".repeat(65_535))];
+        let error = encode_day_file(&records).unwrap_err();
+        assert_eq!(error, DayFormatError::TextTooLong { index: 0 });
+        assert!(error.to_string().contains("exceeds 65535 bytes"));
     }
 }

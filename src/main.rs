@@ -4,6 +4,7 @@ mod day;
 
 use std::{
     fs,
+    hash::{Hash, Hasher},
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -18,6 +19,7 @@ struct MonthFile {
     year: u16,
     month: u8,
     records: Vec<DayRecord>,
+    source_fingerprint: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,6 +48,8 @@ struct NikkiApp {
     new_year: u16,
     new_month: u8,
     new_day: u8,
+    confirm_close: bool,
+    allow_close: bool,
     status: String,
 }
 
@@ -74,6 +78,8 @@ impl NikkiApp {
             new_year,
             new_month,
             new_day: 1,
+            confirm_close: false,
+            allow_close: false,
             status: String::new(),
         }
     }
@@ -221,9 +227,21 @@ impl NikkiApp {
             .months
             .iter()
             .find(|file| file.year == year && file.month == month);
-        if loaded_month.is_none() && path.exists() {
-            self.status = "既存の月ファイルを正常に読み込めないため、上書きしません".to_owned();
-            return;
+        let expected_fingerprint = loaded_month.map(|file| file.source_fingerprint);
+        match source_unchanged(&path, expected_fingerprint) {
+            Ok(true) => {}
+            Ok(false) if expected_fingerprint.is_some() => {
+                self.status = "他のプロセスが月ファイルを変更したため保存を中止しました。再読み込みしてください".to_owned();
+                return;
+            }
+            Ok(false) => {
+                self.status = "既存の月ファイルを正常に読み込めないため、上書きしません".to_owned();
+                return;
+            }
+            Err(error) => {
+                self.status = format!("保存前に月ファイルを確認できませんでした: {error}");
+                return;
+            }
         }
         let mut records = loaded_month
             .map(|file| file.records.clone())
@@ -355,6 +373,12 @@ impl NikkiApp {
 
 impl eframe::App for NikkiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        let close_requested = context.input(|input| input.viewport().close_requested());
+        if close_requested && self.dirty && !self.allow_close {
+            context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_close = true;
+        }
+
         let mut choose_folder = false;
         let mut reload = false;
         let mut export = false;
@@ -441,6 +465,29 @@ impl eframe::App for NikkiApp {
             self.begin_new_entry();
         }
 
+        if self.confirm_close {
+            egui::Window::new("未保存の変更")
+                .collapsible(false)
+                .resizable(false)
+                .show(context, |ui| {
+                    ui.label("未保存の変更を破棄して終了しますか？");
+                    ui.horizontal(|ui| {
+                        if ui.button("破棄して閉じる").clicked() {
+                            self.allow_close = true;
+                            self.confirm_close = false;
+                            context.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        if ui.button("編集に戻る").clicked() {
+                            self.confirm_close = false;
+                        }
+                    });
+                });
+        }
+
+        egui::TopBottomPanel::bottom("status").show(context, |ui| {
+            ui.label(&self.status);
+        });
+
         let rows = self.visible_rows();
         let mut selected_row = None;
         egui::SidePanel::left("entry-list")
@@ -489,40 +536,45 @@ impl eframe::App for NikkiApp {
                     }
                 }
 
+                let mut metadata_changed = false;
                 ui.horizontal(|ui| {
-                    ui.label("天気コード");
-                    if ui
-                        .add(egui::DragValue::new(&mut draft.weather_code).range(0..=31))
-                        .changed()
-                    {
-                        self.dirty = true;
-                    }
-                    ui.label("気分コード");
-                    if ui
-                        .add(egui::DragValue::new(&mut draft.mood_code).range(0..=15))
-                        .changed()
-                    {
-                        self.dirty = true;
-                    }
+                    metadata_changed |= code_selector(
+                        ui,
+                        "weather-code",
+                        "天気コード",
+                        &mut draft.weather_code,
+                        27,
+                    );
+                    metadata_changed |=
+                        code_selector(ui, "mood-code", "気分コード", &mut draft.mood_code, 3);
                     if ui
                         .checkbox(&mut draft.anniversary, "記念日")
                         .changed()
                     {
-                        self.dirty = true;
+                        metadata_changed = true;
                     }
                 });
-                ui.label("天気・気分の表示名は未確定のため、保存値をコードとして扱います。");
-                ui.separator();
-                if ui
-                    .add(
-                        egui::TextEdit::multiline(&mut draft.text)
-                            .desired_rows(24)
-                            .desired_width(f32::INFINITY),
-                    )
-                    .changed()
-                {
+                if metadata_changed {
                     self.dirty = true;
                 }
+                ui.label("天気・気分の表示名は未確定のため、保存値をコードとして扱います。");
+                ui.separator();
+                let editor_height = (ui.available_height() - 44.0).max(80.0);
+                egui::ScrollArea::vertical()
+                    .max_height(editor_height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if ui
+                            .add(
+                                egui::TextEdit::multiline(&mut draft.text)
+                                    .desired_rows(24)
+                                    .desired_width(f32::INFINITY),
+                            )
+                            .changed()
+                        {
+                            self.dirty = true;
+                        }
+                    });
                 ui.horizontal(|ui| {
                     let can_save = self.pending_new.is_some() || self.dirty;
                     if ui
@@ -550,11 +602,31 @@ impl eframe::App for NikkiApp {
         if discard {
             self.discard_draft();
         }
-
-        egui::TopBottomPanel::bottom("status").show(context, |ui| {
-            ui.label(&self.status);
-        });
     }
+}
+
+fn code_selector(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    label: &str,
+    value: &mut u8,
+    max_code: u8,
+) -> bool {
+    ui.label(label);
+    let selected_text = if *value <= max_code {
+        value.to_string()
+    } else {
+        format!("{value} (未対応)")
+    };
+    let mut changed = false;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(selected_text)
+        .show_ui(ui, |ui| {
+            for code in 0..=max_code {
+                changed |= ui.selectable_value(value, code, code.to_string()).changed();
+            }
+        });
+    changed
 }
 
 fn load_months(data_dir: &Path) -> (Vec<MonthFile>, Vec<String>) {
@@ -613,12 +685,18 @@ fn load_months(data_dir: &Path) -> (Vec<MonthFile>, Vec<String>) {
 
         let parsed = fs::read(&path)
             .map_err(|_| "ファイルを読み込めません".to_owned())
-            .and_then(|bytes| parse_day_file(&bytes).map_err(|error| error.to_string()));
+            .and_then(|bytes| {
+                let fingerprint = source_fingerprint(&bytes);
+                parse_day_file(&bytes)
+                    .map(|file| (file, fingerprint))
+                    .map_err(|error| error.to_string())
+            });
         match parsed {
-            Ok(file) => months.push(MonthFile {
+            Ok((file, source_fingerprint)) => months.push(MonthFile {
                 year,
                 month,
                 records: file.records,
+                source_fingerprint,
             }),
             Err(error) => errors.push(format!("{}: {error}", path.display())),
         }
@@ -626,6 +704,23 @@ fn load_months(data_dir: &Path) -> (Vec<MonthFile>, Vec<String>) {
 
     months.sort_by_key(|file| (file.year, file.month));
     (months, errors)
+}
+
+fn source_fingerprint(bytes: &[u8]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn source_unchanged(path: &Path, expected_fingerprint: Option<u64>) -> io::Result<bool> {
+    match expected_fingerprint {
+        Some(expected) => match fs::read(path) {
+            Ok(bytes) => Ok(source_fingerprint(&bytes) == expected),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        },
+        None => Ok(!path.try_exists()?),
+    }
 }
 
 fn valid_date(year: u16, month: u8, day: u8) -> bool {
@@ -654,6 +749,13 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;
     Ok(())
+}
+
+fn neutralize_csv_formula(text: &str) -> String {
+    match text.chars().next() {
+        Some('=' | '+' | '-' | '@' | '\t' | '\r') => format!("'{text}"),
+        _ => text.to_owned(),
+    }
 }
 
 fn write_csv_file(path: &Path, months: &[MonthFile]) -> Result<(), Box<dyn std::error::Error>> {
@@ -685,7 +787,7 @@ fn write_csv_file(path: &Path, months: &[MonthFile]) -> Result<(), Box<dyn std::
             record.weather_code().to_string(),
             record.mood_code().to_string(),
             record.is_anniversary().to_string(),
-            record.text.clone(),
+            neutralize_csv_formula(&record.text),
         ])?;
     }
     writer.flush()?;
@@ -770,6 +872,8 @@ mod tests {
             new_year: 2026,
             new_month: 11,
             new_day: 8,
+            confirm_close: false,
+            allow_close: false,
             status: String::new(),
         };
 
@@ -787,6 +891,26 @@ mod tests {
         write_atomic(&path, b"new bytes").unwrap();
         assert_eq!(fs::read(path).unwrap(), b"new bytes");
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn detects_external_changes_before_saving_month_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("202611.DAY");
+        let original =
+            encode_day_file(&[DayRecord::new(8, 0, "synthetic original".to_owned())]).unwrap();
+        fs::write(&path, &original).unwrap();
+        let (months, errors) = load_months(directory.path());
+        assert!(errors.is_empty());
+        let fingerprint = months[0].source_fingerprint;
+        assert!(source_unchanged(&path, Some(fingerprint)).unwrap());
+
+        let updated =
+            encode_day_file(&[DayRecord::new(8, 0, "synthetic external edit".to_owned())]).unwrap();
+        fs::write(&path, updated).unwrap();
+
+        assert!(!source_unchanged(&path, Some(fingerprint)).unwrap());
+        assert!(!source_unchanged(&path, None).unwrap());
     }
 
     #[test]
@@ -808,15 +932,20 @@ mod tests {
     fn csv_export_contains_dates_codes_and_quoted_text() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("export.csv");
-        let record = DayRecord::new(
-            8,
-            flags_with_metadata(0, 3, 2, true).unwrap(),
-            "a,\"b\"".to_owned(),
-        );
+        let records = vec![
+            DayRecord::new(
+                8,
+                flags_with_metadata(0, 3, 2, true).unwrap(),
+                "a,\"b\"".to_owned(),
+            ),
+            DayRecord::new(9, 0, "=1+1".to_owned()),
+            DayRecord::new(10, 0, "plain text".to_owned()),
+        ];
         let month = MonthFile {
             year: 2026,
             month: 11,
-            records: vec![record],
+            records,
+            source_fingerprint: 0,
         };
         write_csv_file(&path, &[month]).unwrap();
         let bytes = fs::read(path).unwrap();
@@ -833,11 +962,16 @@ mod tests {
                 "entry"
             ]
         );
-        let row = reader.records().next().unwrap().unwrap();
+        let mut rows = reader.records();
+        let row = rows.next().unwrap().unwrap();
         assert_eq!(&row[0], "2026-11-08");
         assert_eq!(&row[1], "3");
         assert_eq!(&row[2], "2");
         assert_eq!(&row[3], "true");
         assert_eq!(&row[4], "a,\"b\"");
+        let formula_row = rows.next().unwrap().unwrap();
+        assert_eq!(&formula_row[4], "'=1+1");
+        let normal_row = rows.next().unwrap().unwrap();
+        assert_eq!(&normal_row[4], "plain text");
     }
 }
