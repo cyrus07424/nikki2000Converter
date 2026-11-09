@@ -23,13 +23,15 @@ try {
     [System.IO.File]::WriteAllBytes($month, $fixture)
     $originalHash = (Get-FileHash -LiteralPath $month).Hash
 
-    $process = Start-Process -FilePath $target -WorkingDirectory $working -PassThru
+    $stderr = Join-Path $root "stderr.txt"
+    $process = Start-Process -FilePath $target -WorkingDirectory $working -RedirectStandardError $stderr -PassThru
     $deadline = (Get-Date).AddSeconds(30)
     do {
         Start-Sleep -Milliseconds 500
         $process.Refresh()
         if ($process.HasExited) {
-            throw "Portable application exited during startup (code $($process.ExitCode))."
+            $diagnostic = Get-Content -LiteralPath $stderr -Raw
+            throw "Portable application exited during startup (code $($process.ExitCode)): $diagnostic"
         }
         if ($process.MainWindowHandle -ne 0 -and $process.Responding) {
             break
