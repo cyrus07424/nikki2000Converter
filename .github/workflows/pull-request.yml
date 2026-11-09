@@ -1,0 +1,37 @@
+name: Pull request validation
+
+on:
+  pull_request:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check formatting and tests
+        run: |
+          cargo fmt --all -- --check
+          cargo test --all-targets
+
+      - name: Build Windows executable
+        run: cargo build --release
+
+      - name: Verify portable executable
+        shell: pwsh
+        run: |
+          $exe = "target\release\nikki2000-converter.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Release executable was not produced: $exe"
+          }

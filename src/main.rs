@@ -55,12 +55,13 @@ struct NikkiApp {
 
 impl NikkiApp {
     fn new() -> Self {
-        let base = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(Path::to_path_buf))
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
-        let data_dir = base.join("DATA");
+        let data_dir = std::env::current_exe()
+            .map(|path| data_dir_for_executable(&path))
+            .unwrap_or_else(|_| {
+                std::env::current_dir()
+                    .map(|path| path.join("DATA"))
+                    .unwrap_or_else(|_| PathBuf::from("DATA"))
+            });
         let (months, errors) = load_months(&data_dir);
         let (new_year, new_month) = months
             .last()
@@ -218,7 +219,7 @@ impl NikkiApp {
             && draft.mood_code == 0
             && !draft.anniversary
         {
-            self.status = "旧アプリと同様、本文も属性も空の新規日記は保存しません".to_owned();
+            self.status = "オリジナル版と同様、本文も属性も空の新規日記は保存しません".to_owned();
             return;
         }
 
@@ -345,7 +346,7 @@ impl NikkiApp {
                     month.month,
                     record.day,
                     record.weather_code(),
-                    record.mood_code(),
+                    mood_description(record.mood_code()),
                     anniversary,
                     preview
                 );
@@ -545,8 +546,7 @@ impl eframe::App for NikkiApp {
                         &mut draft.weather_code,
                         27,
                     );
-                    metadata_changed |=
-                        code_selector(ui, "mood-code", "気分コード", &mut draft.mood_code, 3);
+                    metadata_changed |= mood_selector(ui, &mut draft.mood_code);
                     if ui
                         .checkbox(&mut draft.anniversary, "記念日")
                         .changed()
@@ -557,7 +557,9 @@ impl eframe::App for NikkiApp {
                 if metadata_changed {
                     self.dirty = true;
                 }
-                ui.label("天気・気分の表示名は未確定のため、保存値をコードとして扱います。");
+                ui.label(
+                    "天気はオリジナル版のコード 0–27 で選択します。気分の説明語はアイコンの表情に基づくもので、正式な表示名ではありません。",
+                );
                 ui.separator();
                 let editor_height = (ui.available_height() - 44.0).max(80.0);
                 egui::ScrollArea::vertical()
@@ -624,6 +626,32 @@ fn code_selector(
         .show_ui(ui, |ui| {
             for code in 0..=max_code {
                 changed |= ui.selectable_value(value, code, code.to_string()).changed();
+            }
+        });
+    changed
+}
+
+fn mood_description(code: u8) -> String {
+    let label = match code {
+        0 => "笑顔",
+        1 => "ふつう",
+        2 => "悲しい",
+        3 => "怒り",
+        _ => return format!("{code} (未対応)"),
+    };
+    format!("{label} ({code})")
+}
+
+fn mood_selector(ui: &mut egui::Ui, value: &mut u8) -> bool {
+    ui.label("気分");
+    let mut changed = false;
+    egui::ComboBox::from_id_salt("mood-code")
+        .selected_text(mood_description(*value))
+        .show_ui(ui, |ui| {
+            for code in 0..=3 {
+                changed |= ui
+                    .selectable_value(value, code, mood_description(code))
+                    .changed();
             }
         });
     changed
@@ -827,6 +855,13 @@ fn configure_japanese_font(_context: &egui::Context) -> bool {
     true
 }
 
+fn data_dir_for_executable(executable_path: &Path) -> PathBuf {
+    executable_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("DATA")
+}
+
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -850,6 +885,41 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_directory_is_resolved_next_to_executable_not_working_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let install_dir = directory.path().join("original-install");
+        let working_dir = directory.path().join("elsewhere");
+        let data_dir = install_dir.join("DATA");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&working_dir).unwrap();
+        let executable_path = install_dir.join("nikki2000-converter.exe");
+        let fixture = encode_day_file(&[DayRecord::new(
+            8,
+            0,
+            "synthetic directory fixture".to_owned(),
+        )])
+        .unwrap();
+        fs::write(data_dir.join("202611.DAY"), fixture).unwrap();
+
+        let resolved_data_dir = data_dir_for_executable(&executable_path);
+        assert_ne!(resolved_data_dir, working_dir.join("DATA"));
+        let (months, errors) = load_months(&resolved_data_dir);
+
+        assert!(errors.is_empty());
+        assert_eq!(months.len(), 1);
+        assert_eq!(months[0].records[0].text, "synthetic directory fixture");
+    }
+
+    #[test]
+    fn mood_descriptions_match_the_observed_original_icon_order() {
+        assert_eq!(mood_description(0), "笑顔 (0)");
+        assert_eq!(mood_description(1), "ふつう (1)");
+        assert_eq!(mood_description(2), "悲しい (2)");
+        assert_eq!(mood_description(3), "怒り (3)");
+        assert_eq!(mood_description(4), "4 (未対応)");
+    }
 
     #[test]
     fn empty_new_entry_is_not_written() {

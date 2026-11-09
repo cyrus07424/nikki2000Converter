@@ -299,6 +299,55 @@ mod tests {
     }
 
     #[test]
+    fn every_original_weather_and_mood_choice_survives_save_and_reload() {
+        for weather in 0..=27 {
+            for mood in 0..=3 {
+                let flags = flags_with_metadata(0x002d, weather, mood, true).unwrap();
+                let bytes = encode_day_file(&[DayRecord::new(
+                    8,
+                    flags,
+                    "synthetic metadata fixture".to_owned(),
+                )])
+                .unwrap();
+                let restored = parse_day_file(&bytes).unwrap();
+                let record = &restored.records[0];
+
+                assert_eq!(record.weather_code(), weather);
+                assert_eq!(record.mood_code(), mood);
+                assert!(record.is_anniversary());
+                assert_eq!(record.flags & 0x003f, 0x002d);
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_unknown_metadata_codes_and_reserved_flags() {
+        let flags = flags_with_metadata(0x002d, 31, 15, true).unwrap();
+        let bytes = encode_day_file(&[DayRecord::new(
+            8,
+            flags,
+            "synthetic unknown-code fixture".to_owned(),
+        )])
+        .unwrap();
+        let mut record = parse_day_file(&bytes).unwrap().records.remove(0);
+
+        assert_eq!(record.weather_code(), 31);
+        assert_eq!(record.mood_code(), 15);
+        record.flags = flags_with_metadata(
+            record.flags,
+            record.weather_code(),
+            record.mood_code(),
+            false,
+        )
+        .unwrap();
+        let restored = parse_day_file(&encode_day_file(&[record]).unwrap()).unwrap();
+        assert_eq!(restored.records[0].weather_code(), 31);
+        assert_eq!(restored.records[0].mood_code(), 15);
+        assert!(!restored.records[0].is_anniversary());
+        assert_eq!(restored.records[0].flags & 0x003f, 0x002d);
+    }
+
+    #[test]
     fn round_trips_shift_jis_text_and_metadata() {
         let flags = flags_with_metadata(0, 5, 2, true).unwrap();
         let records = vec![DayRecord::new(12, flags, "日本語の日記".to_owned())];

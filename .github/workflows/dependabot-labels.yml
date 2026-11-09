@@ -1,0 +1,63 @@
+name: Dependabot labels
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add dependency label and clear stale auto-merge label
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const repository = process.env.GITHUB_REPOSITORY;
+            if (
+              pr.base.repo.full_name !== repository ||
+              pr.head.repo?.full_name !== repository
+            ) {
+              core.info("Skipping Dependabot PR from a different repository.");
+              return;
+            }
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.getLabel({
+                  ...context.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  ...context.repo,
+                  name,
+                  color,
+                  description,
+                });
+              }
+            }
+
+            await ensureLabel("dependencies", "0366d6", "Dependency update");
+            await ensureLabel("automerge", "0e8a16", "Eligible for Mergery auto-merge");
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: pr.number,
+              labels: ["dependencies"],
+            });
+
+            if (pr.labels.some((label) => label.name.toLowerCase() === "automerge")) {
+              await github.rest.issues.removeLabel({
+                ...context.repo,
+                issue_number: pr.number,
+                name: "automerge",
+              });
+            }
