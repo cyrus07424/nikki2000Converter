@@ -62,6 +62,10 @@ impl NikkiApp {
                     .map(|path| path.join("DATA"))
                     .unwrap_or_else(|_| PathBuf::from("DATA"))
             });
+        Self::from_data_dir(data_dir)
+    }
+
+    fn from_data_dir(data_dir: PathBuf) -> Self {
         let (months, errors) = load_months(&data_dir);
         let (new_year, new_month) = months
             .last()
@@ -345,7 +349,7 @@ impl NikkiApp {
                     month.year,
                     month.month,
                     record.day,
-                    record.weather_code(),
+                    weather_description(record.weather_code()),
                     mood_description(record.mood_code()),
                     anniversary,
                     preview
@@ -539,13 +543,7 @@ impl eframe::App for NikkiApp {
 
                 let mut metadata_changed = false;
                 ui.horizontal(|ui| {
-                    metadata_changed |= code_selector(
-                        ui,
-                        "weather-code",
-                        "天気コード",
-                        &mut draft.weather_code,
-                        27,
-                    );
+                    metadata_changed |= weather_selector(ui, &mut draft.weather_code);
                     metadata_changed |= mood_selector(ui, &mut draft.mood_code);
                     if ui
                         .checkbox(&mut draft.anniversary, "記念日")
@@ -558,7 +556,7 @@ impl eframe::App for NikkiApp {
                     self.dirty = true;
                 }
                 ui.label(
-                    "天気はオリジナル版のコード 0–27 で選択します。気分の説明語はアイコンの表情に基づくもので、正式な表示名ではありません。",
+                    "天気・気分はオリジナル版の図柄を説明する語で表示します。正式な表示名ではありません。「／」「→」は元の図柄の区切りです。",
                 );
                 ui.separator();
                 let editor_height = (ui.available_height() - 44.0).max(80.0);
@@ -607,25 +605,53 @@ impl eframe::App for NikkiApp {
     }
 }
 
-fn code_selector(
-    ui: &mut egui::Ui,
-    id: &'static str,
-    label: &str,
-    value: &mut u8,
-    max_code: u8,
-) -> bool {
-    ui.label(label);
-    let selected_text = if *value <= max_code {
-        value.to_string()
-    } else {
-        format!("{value} (未対応)")
-    };
+fn weather_description(code: u8) -> String {
+    let labels = [
+        "太陽",
+        "雲",
+        "傘",
+        "雪だるま",
+        "太陽／雲",
+        "太陽／傘",
+        "雲／太陽",
+        "雲／傘",
+        "傘／太陽",
+        "傘／雲",
+        "太陽→雲",
+        "太陽→傘",
+        "雲→太陽",
+        "雲→傘",
+        "傘→太陽",
+        "傘→雲",
+        "雪だるま／太陽",
+        "雪だるま／雲",
+        "雪だるま／傘",
+        "太陽／雪だるま",
+        "雲／雪だるま",
+        "傘／雪だるま",
+        "雪だるま→太陽",
+        "雪だるま→雲",
+        "雪だるま→傘",
+        "太陽→雪だるま",
+        "雲→雪だるま",
+        "傘→雪だるま",
+    ];
+    match labels.get(usize::from(code)) {
+        Some(label) => format!("{label} ({code})"),
+        None => format!("{code} (未対応)"),
+    }
+}
+
+fn weather_selector(ui: &mut egui::Ui, value: &mut u8) -> bool {
+    ui.label("天気");
     let mut changed = false;
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(selected_text)
+    egui::ComboBox::from_id_salt("weather-code")
+        .selected_text(weather_description(*value))
         .show_ui(ui, |ui| {
-            for code in 0..=max_code {
-                changed |= ui.selectable_value(value, code, code.to_string()).changed();
+            for code in 0..=27 {
+                changed |= ui
+                    .selectable_value(value, code, weather_description(code))
+                    .changed();
             }
         });
     changed
@@ -919,6 +945,88 @@ mod tests {
         assert_eq!(mood_description(2), "悲しい (2)");
         assert_eq!(mood_description(3), "怒り (3)");
         assert_eq!(mood_description(4), "4 (未対応)");
+    }
+
+    #[test]
+    fn weather_descriptions_cover_every_original_choice_and_keep_unknown_codes() {
+        let expected = [
+            "太陽 (0)",
+            "雲 (1)",
+            "傘 (2)",
+            "雪だるま (3)",
+            "太陽／雲 (4)",
+            "太陽／傘 (5)",
+            "雲／太陽 (6)",
+            "雲／傘 (7)",
+            "傘／太陽 (8)",
+            "傘／雲 (9)",
+            "太陽→雲 (10)",
+            "太陽→傘 (11)",
+            "雲→太陽 (12)",
+            "雲→傘 (13)",
+            "傘→太陽 (14)",
+            "傘→雲 (15)",
+            "雪だるま／太陽 (16)",
+            "雪だるま／雲 (17)",
+            "雪だるま／傘 (18)",
+            "太陽／雪だるま (19)",
+            "雲／雪だるま (20)",
+            "傘／雪だるま (21)",
+            "雪だるま→太陽 (22)",
+            "雪だるま→雲 (23)",
+            "雪だるま→傘 (24)",
+            "太陽→雪だるま (25)",
+            "雲→雪だるま (26)",
+            "傘→雪だるま (27)",
+        ];
+        for (code, description) in expected.iter().enumerate() {
+            assert_eq!(weather_description(code as u8), *description);
+        }
+        for code in 28..=31 {
+            assert_eq!(weather_description(code), format!("{code} (未対応)"));
+        }
+    }
+
+    #[test]
+    fn saving_every_metadata_choice_reloads_and_preserves_other_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("202611.DAY");
+        let flags = flags_with_metadata(0x002d, 31, 15, true).unwrap();
+        let fixture = encode_day_file(&[
+            DayRecord::new(8, flags, "synthetic edited record".to_owned()),
+            DayRecord::new(9, flags, "synthetic untouched record".to_owned()),
+        ])
+        .unwrap();
+        fs::write(&path, &fixture).unwrap();
+        let untouched = parse_day_file(&fixture).unwrap().records.remove(1);
+        let mut app = NikkiApp::from_data_dir(directory.path().to_path_buf());
+        app.select_record(EntryKey {
+            month_index: 0,
+            record_index: 0,
+        });
+
+        for weather in 0..=27 {
+            for mood in 0..=3 {
+                let draft = app.draft.as_mut().unwrap();
+                draft.weather_code = weather;
+                draft.mood_code = mood;
+                app.dirty = true;
+                app.save_draft();
+
+                assert!(!app.dirty, "save failed: {}", app.status);
+                let restored = parse_day_file(&fs::read(&path).unwrap()).unwrap();
+                assert_eq!(restored.records[0].weather_code(), weather);
+                assert_eq!(restored.records[0].mood_code(), mood);
+                assert_eq!(restored.records[0].flags & 0x003f, 0x002d);
+                assert!(restored.records[0].is_anniversary());
+                assert_eq!(restored.records[0].day, 8);
+                assert_eq!(restored.records[0].text, "synthetic edited record");
+                assert_eq!(restored.records[1], untouched);
+                let draft = app.draft.as_ref().unwrap();
+                assert_eq!(draft.weather_code, weather);
+                assert_eq!(draft.mood_code, mood);
+            }
+        }
     }
 
     #[test]
