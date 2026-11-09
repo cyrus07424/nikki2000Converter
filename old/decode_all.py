@@ -1,3 +1,4 @@
+# Legacy reference converter; it does not implement the verified N20 layout.
 import os
 import csv
 import re

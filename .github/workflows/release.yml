@@ -1,0 +1,62 @@
+name: Build and publish Windows release
+
+on:
+  push:
+    branches:
+      - "**"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out pushed commit
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check formatting and tests
+        run: |
+          cargo fmt --all -- --check
+          cargo test --all-targets
+
+      - name: Build Windows executable
+        run: cargo build --release
+
+      - name: Verify artifact and prepare unique release identity
+        shell: pwsh
+        run: |
+          $exe = "target\release\nikki2000-converter.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Release executable was not produced: $exe"
+          }
+
+          "RELEASE_EXE=$((Resolve-Path -LiteralPath $exe).Path)" >> $env:GITHUB_ENV
+          "RELEASE_TAG=push-build-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_ENV
+          "RELEASE_TITLE=Windows build $($env:GITHUB_SHA.Substring(0, 7)) ($env:GITHUB_REF_NAME)" >> $env:GITHUB_ENV
+
+      - name: Create a unique tag at the pushed commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ref = "refs/tags/$env:RELEASE_TAG"
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/refs" `
+            -f "ref=$ref" `
+            -f "sha=$env:GITHUB_SHA"
+
+      - name: Publish prerelease with portable executable
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "Automated Windows x64 build for commit $env:GITHUB_SHA from $env:GITHUB_REF."
+          gh release create $env:RELEASE_TAG $env:RELEASE_EXE `
+            --title $env:RELEASE_TITLE `
+            --notes $notes `
+            --prerelease `
+            --verify-tag `
+            --target $env:GITHUB_SHA
