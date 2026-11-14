@@ -1,8 +1,8 @@
-# 日記帳2000 Rust 版
+# 日記帳2000RE (Rust Edition / Reconstructed)
 
-ぽてと様のオリジナル版「日記帳2000」([公式サイト](https://www.poteto-house.com/poteto/soft-old.html#nikki)) の `.DAY` ファイルを読み書きし、日記を一覧・編集・検索し、CSVへ出力する Windows デスクトップアプリです。
+## 概要
 
-## 使い方
+このプロジェクトは、ぽてと様による日記帳フリーソフト「[日記帳2000](https://www.poteto-house.com/poteto/soft-old.html#nikki)」で作成された日記データ（`.DAY`ファイル）と互換性を持つ日記帳アプリケーションです。
 
 1. ビルド済みの `nikki2000-converter.exe` を用意します（[GitHub Releases](https://github.com/cyrus07424/nikki2000Converter/releases) からダウンロードできます）。
 2. 実行ファイルをオリジナル版 `nikki.exe` がインストールされているフォルダーに置きます。
@@ -16,7 +16,7 @@
 cargo build --release
 ```
 
-実行ファイルは `target\release\nikki2000-converter.exe` に生成されます。
+実行ファイルは `target\release\nikki2000re.exe` に生成されます。
 
 ## 主な機能
 
@@ -38,7 +38,7 @@ Windows ではシステムの日本語フォントを読み込みます。完全
 
 実装はオリジナル版 `nikki.exe` の静的解析と、ユーザーが合成データと確認したファイルの構造照合に基づきます。ファイルは `N20` シグネチャ、レコード数、本文長、XOR `0x12` で変換された本文から成り、本文には日ごとのレコードが格納されます。日本語本文は Shift-JIS / CP932 として扱い、未編集のレコードは元の本文バイト列を保持します。
 
-解析根拠、確認済みの構造、適用範囲および未解明点は [`FORMAT_ANALYSIS.md`](FORMAT_ANALYSIS.md) に記載しています。パスワード機能はオリジナル版の設定・起動制御に属し、`.DAY` 本文の暗号化には使われていません。XOR は難読化であり、機密保護ではありません。
+解析根拠、確認済みの構造、適用範囲および未解明点は [`FORMAT_ANALYSIS.md`](doc/FORMAT_ANALYSIS.md) に記載しています。パスワード機能はオリジナル版の設定・起動制御に属し、`.DAY` 本文の暗号化には使われていません。XOR は難読化であり、機密保護ではありません。
 
 このアプリは正常な `.DAY` 構造を厳密に検証し、破損・未対応のファイルは内容を表示せずエラーとして報告します。オリジナル版 `N12` 形式の変換仕様は未解析のため、対応していません。参考用の Python コンバーターは [`old/decode_all.py`](old/decode_all.py) に保管しています。そこに記載された 13 バイトヘッダーやフラグ解釈はオリジナル版実行ファイルと一致しないため、本アプリの仕様根拠にはしていません。
 
@@ -50,7 +50,7 @@ Dependabot は Cargo と GitHub Actions の依存関係を毎週更新します�
 
 ## 自動ビルドとリリース
 
-ブランチへ push するたびに GitHub Actions が整形チェック・テストを実行し、Windows x64 の Release 実行ファイルをビルドして GitHub Release に prerelease として添付します。成果物はインストーラー不要の `nikki2000-converter.exe` です。各ワークフロー実行は実行IDと再試行番号から一意なタグを作成し、既存タグやReleaseを上書きしません。ワークフローにはリポジトリの `contents: write` 権限が必要です。
+ブランチへ push するたびに GitHub Actions が整形チェック・テストを実行し、Windows x64 の Release 実行ファイルをビルドして GitHub Release に prerelease として添付します。成果物はインストーラー不要の `nikki2000re.exe` です。各ワークフロー実行は実行IDと再試行番号から一意なタグを作成し、既存タグやReleaseを上書きしません。ワークフローにはリポジトリの `contents: write` 権限が必要です。
 
 ## テスト
 
@@ -58,5 +58,3 @@ Dependabot は Cargo と GitHub Actions の依存関係を毎週更新します�
 cargo test
 cargo build --release
 ```
-
-テストはコード内で生成する合成フィクスチャのみを使用し、個人の日記内容を含みません。

@@ -35,7 +35,7 @@ jobs:
       - name: Verify artifact and prepare unique release identity
         shell: pwsh
         run: |
-          $exe = "target\release\nikki2000-converter.exe"
+          $exe = "target\release\nikki2000re.exe"
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
             throw "Release executable was not produced: $exe"
           }
